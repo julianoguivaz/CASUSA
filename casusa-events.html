@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Eventos CASUSA</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out forwards',
+                        'fade-in-up': 'fadeInUp 0.5s ease-out forwards',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://unpkg.com/lucide-react@0.294.0/dist/lucide-react.js"></script>
+</head>
+<body class="bg-slate-900">
+
+    <div id="root"></div>
+
+    <script>
+        // Substitua os valores abaixo pelas configurações do seu projeto Firebase.
+        // Você pode encontrar isso no Console do Firebase > Configurações do Projeto.
+        const __firebase_config = JSON.stringify({
+            apiKey: "SUA_API_KEY",
+            authDomain: "SEU_AUTH_DOMAIN",
+            projectId: "SEU_PROJECT_ID",
+            storageBucket: "SEU_STORAGE_BUCKET",
+            messagingSenderId: "SEU_MESSAGING_SENDER_ID",
+            appId: "SEU_APP_ID"
+        });
+
+        // O ID deve ser único para sua instância do app. Pode ser o nome do projeto.
+        const __app_id = "casusa-events-app";
+        
+        // Deixe como null se não estiver usando tokens de autenticação customizados na inicialização.
+        const __initial_auth_token = null; 
+    </script>
+
+    <script type="text/babel" data-presets="react">
+
+        // --- IMPORTAÇÕES GLOBAIS ---
+        const { useState, useEffect, useMemo, useRef } = React;
+        const { 
+            Plus, Edit, Trash2, Users, Calendar, MapPin, Clock, DollarSign, FileText, 
+            ArrowLeft, UserCheck, X, QrCode, CheckCircle2, XCircle 
+        } = LucideReact;
+
+        // --- MÓDULOS FIREBASE (ESM via Skypack CDN) ---
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+        import { 
+            getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken 
+        } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
+        import { 
+            getFirestore, collection, doc, addDoc, setDoc, deleteDoc, onSnapshot,
+            query, where, Timestamp, getDoc, updateDoc
+        } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+
+        // --- CONFIGURAÇÃO DO FIREBASE ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'casusa-events-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // --- HOOKS PARA LIBS EXTERNAS ---
+        function useScript(src) {
+            const [status, setStatus] = useState(src ? "loading" : "idle");
+            useEffect(() => {
+                if (!src) {
+                    setStatus("idle");
+                    return;
+                }
+                let script = document.querySelector(`script[src="${src}"]`);
+                if (!script) {
+                    script = document.createElement("script");
+                    script.src = src;
+                    script.async = true;
+                    document.body.appendChild(script);
+                    const setAttributeFromEvent = (event) => {
+                        script.setAttribute("data-status", event.type === "load" ? "ready" : "error");
+                    };
+                    script.addEventListener("load", setAttributeFromEvent);
+                    script.addEventListener("error", setAttributeFromEvent);
+                }
+                
+                const setStateFromEvent = (event) => {
+                    setStatus(event.type === "load" ? "ready" : "error");
+                };
+
+                script.addEventListener("load", setStateFromEvent);
+                script.addEventListener("error", setStateFromEvent);
+
+                return () => {
+                    if (script) {
+                        script.removeEventListener("load", setStateFromEvent);
+                        script.removeEventListener("error", setStateFromEvent);
+                    }
+                };
+            }, [src]);
+            return status;
+        }
+
+
+        // --- COMPONENTES DE UI ---
+
+        const Spinner = () => (
+            <div className="flex justify-center items-center h-full w-full fixed inset-0">
+                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-400"></div>
+            </div>
+        );
+
+        const Modal = ({ children, onClose }) => (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 p-4">
+                <div className="bg-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 relative animate-fade-in-up">
+                    <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors">
+                        <X size={24} />
+                    </button>
+                    {children}
+                </div>
+            </div>
+        );
+
+        const ConfirmationModal = ({ title, message, onConfirm, onCancel }) => (
+            <Modal onClose={onCancel}>
+                <div className="text-white">
+                    <h2 className="text-2xl font-bold mb-4 text-yellow-400">{title}</h2>
+                    <p className="mb-6 text-gray-300">{message}</p>
+                    <div className="flex justify-end gap-4">
+                        <button onClick={onCancel} className="px-6 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 transition-colors">Cancelar</button>
+                        <button onClick={onConfirm} className="px-6 py-2 rounded-lg bg-red-600 hover:bg-red-500 transition-colors font-semibold">Confirmar</button>
+                    </div>
+                </div>
+            </Modal>
+        );
+
+        const QRCodeModal = ({ guest, event, onClose }) => {
+            const qrCodeRef = useRef(null);
+            const qrCodeStatus = useScript("https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js");
+
+            useEffect(() => {
+                if (qrCodeStatus === 'ready' && qrCodeRef.current && guest) {
+                    const qrData = JSON.stringify({ eventId: event.id, guestId: guest.id });
+                    window.QRCode.toCanvas(qrCodeRef.current, qrData, { width: 256, errorCorrectionLevel: 'H' }, function (error) {
+                        if (error) console.error(error)
+                    })
+                }
+            }, [qrCodeStatus, guest, event]);
+
+            return (
+                <Modal onClose={onClose}>
+                    <div className="text-center text-white p-4">
+                        <h2 className="text-2xl font-bold text-yellow-400 mb-2">QR Code de Check-in</h2>
+                        <p className="text-lg mb-1">{guest.fullName}</p>
+                        <p className="text-sm text-gray-400 mb-6">{event.name}</p>
+                        <div className="flex justify-center bg-white p-4 rounded-lg">
+                            {qrCodeStatus === 'ready' ? <canvas ref={qrCodeRef}></canvas> : <Spinner />}
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+
+        // --- FORMULÁRIOS ---
+
+        const EventForm = ({ onSave, onClose, eventToEdit }) => {
+            const initialPricing = {
+                '6-12': { socio: 0, dependente: 0, 'nao-socio': 0 },
+                '12+': { socio: 0, dependente: 0, 'nao-socio': 0 },
+                'convite-especial': { description: '', price: 0 }
+            };
+
+            const [eventData, setEventData] = useState({
+                name: '', date: '', time: '', location: '', maxParticipants: '', pricing: initialPricing,
+            });
+            const [error, setError] = useState('');
+
+            useEffect(() => {
+                if (eventToEdit) {
+                    const pricing = {
+                        ...initialPricing,
+                        ...eventToEdit.pricing,
+                        'convite-especial': {
+                            ...initialPricing['convite-especial'],
+                            ...(eventToEdit.pricing?.['convite-especial'] || {})
+                        }
+                    };
+                    setEventData({
+                        name: eventToEdit.name || '',
+                        date: eventToEdit.date ? new Date(eventToEdit.date.seconds * 1000).toISOString().split('T')[0] : '',
+                        time: eventToEdit.time || '',
+                        location: eventToEdit.location || '',
+                        maxParticipants: eventToEdit.maxParticipants || '',
+                        pricing: pricing,
+                    });
+                }
+            }, [eventToEdit]);
+
+            const handleChange = (e) => {
+                const { name, value } = e.target;
+                setEventData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const handlePriceChange = (ageGroup, guestType, value) => {
+                setEventData(prev => ({
+                    ...prev,
+                    pricing: { ...prev.pricing, [ageGroup]: { ...prev.pricing[ageGroup], [guestType]: parseFloat(value) || 0 } },
+                }));
+            };
+
+            const handleSpecialInviteChange = (field, value) => {
+                setEventData(prev => ({
+                    ...prev,
+                    pricing: {
+                        ...prev.pricing,
+                        'convite-especial': {
+                            ...prev.pricing['convite-especial'],
+                            [field]: field === 'price' ? parseFloat(value) || 0 : value,
+                        },
+                    },
+                }));
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!eventData.name || !eventData.date || !eventData.time || !eventData.maxParticipants) {
+                    setError('Por favor, preencha todos os campos obrigatórios.');
+                    return;
+                }
+                const GUESTS_PER_TABLE = 8;
+                const tableCount = Math.ceil(parseInt(eventData.maxParticipants, 10) / GUESTS_PER_TABLE);
+                const submissionData = {
+                    ...eventData,
+                    maxParticipants: parseInt(eventData.maxParticipants, 10),
+                    date: Timestamp.fromDate(new Date(`${eventData.date}T${eventData.time}`)),
+                    tableCount,
+                };
+                onSave(submissionData);
+            };
+
+            const ageGroups = [ { key: '6-12', label: '6 a 12 anos' }, { key: '12+', label: 'Acima de 12 anos' } ];
+            const guestTypes = [{key: 'socio', label: 'Sócio'}, {key: 'dependente', label: 'Dependente'}, {key: 'nao-socio', label: 'Não-Sócio'}];
+
+            return (
+                <form onSubmit={handleSubmit} className="space-y-6 text-white">
+                    <h2 className="text-3xl font-bold text-yellow-400 mb-6">{eventToEdit ? 'Editar Evento' : 'Criar Novo Evento'}</h2>
+                    {error && <p className="text-red-400 bg-red-900/50 p-3 rounded-lg">{error}</p>}
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2"><label htmlFor="name" className="font-semibold text-gray-300">Nome do Evento</label><input type="text" name="name" value={eventData.name} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                        <div className="space-y-2"><label htmlFor="location" className="font-semibold text-gray-300">Local</label><input type="text" name="location" value={eventData.location} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                        <div className="space-y-2"><label htmlFor="date" className="font-semibold text-gray-300">Data</label><input type="date" name="date" value={eventData.date} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                        <div className="space-y-2"><label htmlFor="time" className="font-semibold text-gray-300">Hora</label><input type="time" name="time" value={eventData.time} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                        <div className="space-y-2"><label htmlFor="maxParticipants" className="font-semibold text-gray-300">Nº de Participantes</label><input type="number" name="maxParticipants" value={eventData.maxParticipants} onChange={handleChange} min="1" className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-slate-700">
+                        <h3 className="text-xl font-bold text-yellow-400">Definição de Preços</h3>
+                        <p className="text-sm text-gray-400">Lembrete: Faixa de 0 a 5 anos e convidados VIP são isentos de cobrança.</p>
+                        {ageGroups.map(ag => (
+                            <div key={ag.key} className="p-4 bg-slate-700/50 rounded-lg">
+                                <h4 className="font-semibold text-lg mb-2">{ag.label}</h4>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                    {guestTypes.map(gt => (
+                                        <div key={gt.key} className="space-y-1">
+                                            <label className="capitalize text-sm text-gray-300">{gt.label}</label>
+                                            <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">R$</span><input type="number" step="0.01" value={eventData.pricing[ag.key]?.[gt.key] || 0} onChange={(e) => handlePriceChange(ag.key, gt.key, e.target.value)} className="w-full bg-slate-600 p-2 pl-9 rounded-md border border-slate-500 focus:ring-2 focus:ring-yellow-400 focus:outline-none" /></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                        <div className="p-4 bg-slate-700/50 rounded-lg">
+                            <h4 className="font-semibold text-lg mb-2">Convite Especial</h4>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-sm text-gray-300">Descrição</label>
+                                    <input
+                                        type="text"
+                                        value={eventData.pricing['convite-especial']?.description || ''}
+                                        onChange={(e) => handleSpecialInviteChange('description', e.target.value)}
+                                        className="w-full bg-slate-600 p-2 rounded-md border border-slate-500 focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                        placeholder="Ex: Patrocinador, Imprensa"
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-sm text-gray-300">Preço</label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">R$</span>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={eventData.pricing['convite-especial']?.price || 0}
+                                            onChange={(e) => handleSpecialInviteChange('price', e.target.value)}
+                                            className="w-full bg-slate-600 p-2 pl-9 rounded-md border border-slate-500 focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end gap-4 pt-6">
+                        <button type="button" onClick={onClose} className="px-6 py-3 rounded-lg bg-gray-600 hover:bg-gray-500 transition-colors font-semibold">Cancelar</button>
+                        <button type="submit" className="px-6 py-3 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 transition-colors font-bold flex items-center gap-2"><UserCheck size={20}/>{eventToEdit ? 'Salvar Alterações' : 'Criar Evento'}</button>
+                    </div>
+                </form>
+            );
+        };
+
+        const GuestForm = ({ event, guests, onSave, onClose, guestToEdit }) => {
+            const GUESTS_PER_TABLE = 8;
+            const initialGuestState = { fullName: '', callSign: '', phone: '', email: '', saram: '', postoGrad: '', ageGroup: '0-5', guestType: 'sócio', tableNumber: '1' };
+            const [guestData, setGuestData] = useState(initialGuestState);
+            const [error, setError] = useState('');
+
+            useEffect(() => {
+                if (guestToEdit) {
+                    setGuestData({ ...initialGuestState, ...guestToEdit });
+                } else {
+                    setGuestData(initialGuestState);
+                }
+            }, [guestToEdit]);
+
+            const handleChange = (e) => {
+                let { name, value } = e.target;
+                if (name === 'postoGrad') {
+                    value = value.toUpperCase();
+                }
+                setGuestData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                setError('');
+                const guestsAtTable = guests.filter(g => g.tableNumber.toString() === guestData.tableNumber.toString() && (!guestToEdit || g.id !== guestToEdit.id)).length;
+                if (guestsAtTable >= GUESTS_PER_TABLE) { setError(`A mesa ${guestData.tableNumber} já está cheia (máx. ${GUESTS_PER_TABLE}).`); return; }
+                if (event.maxParticipants <= guests.filter(g => !guestToEdit || g.id !== guestToEdit.id).length) { setError('O número máximo de participantes foi atingido.'); return; }
+                if (!guestData.fullName) { setError('O nome completo é obrigatório.'); return; }
+                onSave(guestData);
+            };
+
+            const ageGroups = ['0-5', '6-12', '12+'];
+            const guestTypes = ['sócio', 'dependente', 'não-sócio', 'VIP'];
+            const specialInviteDescription = event.pricing?.['convite-especial']?.description;
+            const tableOptions = Array.from({ length: event.tableCount }, (_, i) => i + 1);
+
+            return (
+                <form onSubmit={handleSubmit} className="space-y-4 text-white">
+                    <h2 className="text-3xl font-bold text-yellow-400 mb-6">{guestToEdit ? 'Editar Convidado' : 'Cadastrar Convidado'}</h2>
+                    {error && <p className="text-red-400 bg-red-900/50 p-3 rounded-lg">{error}</p>}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Nome Completo</label><input type="text" name="fullName" value={guestData.fullName} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" required /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Posto/Grad.</label><input type="text" name="postoGrad" value={guestData.postoGrad} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" maxLength="3" placeholder="Ex: SO" /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Nome de Guerra</label><input type="text" name="callSign" value={guestData.callSign} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Telefone</label><input type="tel" name="phone" value={guestData.phone} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">E-mail</label><input type="email" name="email" value={guestData.email} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Nº SARAM</label><input type="text" name="saram" value={guestData.saram} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none" /></div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Faixa Etária</label><select name="ageGroup" value={guestData.ageGroup} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none">{ageGroups.map(ag => <option key={ag} value={ag}>{ag === '12+' ? 'Acima de 12 anos' : `${ag.replace('-', ' a ')} anos`}</option>)}</select></div>
+                        <div className="space-y-2">
+                            <label className="font-semibold text-gray-300">Tipo de Convidado</label>
+                            <select name="guestType" value={guestData.guestType} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none">
+                                {guestTypes.map(gt => <option key={gt} value={gt} className="capitalize">{gt.replace('-', ' ')}</option>)}
+                                {specialInviteDescription && (
+                                    <option value="Convite Especial">{specialInviteDescription}</option>
+                                )}
+                            </select>
+                        </div>
+                        <div className="space-y-2"><label className="font-semibold text-gray-300">Mesa</label><select name="tableNumber" value={guestData.tableNumber} onChange={handleChange} className="w-full bg-slate-700 p-3 rounded-lg border border-slate-600 focus:ring-2 focus:ring-yellow-400 focus:outline-none">{tableOptions.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+                    </div>
+                    <div className="flex justify-end gap-4 pt-6">
+                        <button type="button" onClick={onClose} className="px-6 py-3 rounded-lg bg-gray-600 hover:bg-gray-500 transition-colors font-semibold">Cancelar</button>
+                        <button type="submit" className="px-6 py-3 rounded-lg bg-yellow-400 text-black hover:bg-yellow-300 transition-colors font-bold flex items-center gap-2"><UserCheck size={20}/>{guestToEdit ? 'Salvar Alterações' : 'Adicionar Convidado'}</button>
+                    </div>
+                </form>
+            );
+        };
+
+
+        // --- VIEWS ---
+
+        const EventDetailView = ({ event, onBack, onEditEvent, onDeleteEvent, userId, onStartCheckIn }) => {
+            const [guests, setGuests] = useState([]);
+            const [loadingGuests, setLoadingGuests] = useState(true);
+            const [showGuestForm, setShowGuestForm] = useState(false);
+            const [guestToEdit, setGuestToEdit] = useState(null);
+            const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
+            const [activeTab, setActiveTab] = useState('guests');
+            const [showQRCode, setShowQRCode] = useState(null);
+            const pdfmakeStatus = useScript("https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js");
+            const pdfFontsStatus = useScript("https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js");
+
+            useEffect(() => {
+                if (!event?.id) return;
+                setLoadingGuests(true);
+                const guestsCollection = collection(db, `artifacts/${appId}/public/data/guests`);
+                const q = query(guestsCollection, where("eventId", "==", event.id));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    setGuests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    setLoadingGuests(false);
+                }, (error) => { console.error("Erro ao buscar convidados: ", error); setLoadingGuests(false); });
+                return () => unsubscribe();
+            }, [event.id]);
+
+            const handleSaveGuest = async (guestData) => {
+                try {
+                    const guestPayload = { ...guestData, eventId: event.id, userId };
+                    if (guestToEdit) {
+                        const guestDoc = doc(db, `artifacts/${appId}/public/data/guests`, guestToEdit.id);
+                        await setDoc(guestDoc, guestPayload);
+                    } else {
+                        const guestsCollection = collection(db, `artifacts/${appId}/public/data/guests`);
+                        await addDoc(guestsCollection, { ...guestPayload, checkedIn: false });
+                    }
+                    setShowGuestForm(false); setGuestToEdit(null);
+                } catch (error) { console.error("Erro ao salvar convidado:", error); }
+            };
+            
+            const handleDeleteGuest = async (guestId) => {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/guests`, guestId));
+                    setShowDeleteConfirm(null);
+                } catch (error) { console.error("Erro ao deletar convidado:", error); }
+            };
+
+            const openEditGuestForm = (guest) => { setGuestToEdit(guest); setShowGuestForm(true); };
+
+            const getGuestPrice = (guest) => {
+                if (guest.guestType === 'VIP' || guest.ageGroup === '0-5') return 0;
+                if (guest.guestType === 'Convite Especial') {
+                    return event.pricing?.['convite-especial']?.price || 0;
+                }
+                const ageGroupKey = guest.ageGroup === '6-12' ? '6-12' : '12+';
+                
+                // *** BUG FIX APPLIED HERE ***
+                let guestTypeKey = guest.guestType.toLowerCase();
+                if (guestTypeKey === 'sócio') guestTypeKey = 'socio';
+                if (guestTypeKey === 'não-sócio') guestTypeKey = 'nao-socio';
+
+                return event.pricing?.[ageGroupKey]?.[guestTypeKey] || 0;
+            };
+
+            const getGuestTypeDisplay = (guest) => {
+                if (guest.guestType === 'Convite Especial') {
+                    return event.pricing?.['convite-especial']?.description || 'Convite Especial';
+                }
+                return guest.guestType.replace('-', ' ');
+            };
+
+            const reportData = useMemo(() => {
+                const totalRevenue = guests.reduce((acc, guest) => acc + getGuestPrice(guest), 0);
+                const guestsByTable = guests.reduce((acc, guest) => {
+                    const table = guest.tableNumber;
+                    if (!acc[table]) acc[table] = [];
+                    acc[table].push(guest);
+                    return acc;
+                }, {});
+                return { totalRevenue, guestsByTable };
+            }, [guests, event.pricing]);
+
+            const toDataURL = url => fetch(url)
+                .then(response => response.blob())
+                .then(blob => new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                }));
+
+            const generatePDF = async () => {
+                if (pdfmakeStatus !== 'ready' || pdfFontsStatus !== 'ready' || typeof pdfMake === 'undefined') {
+                    alert("Gerador de PDF ainda não está pronto. Tente novamente em alguns segundos.");
+                    return;
+                }
+
+                const logoDataUrl = await toDataURL('https://i.imgur.com/gS26UaH.png');
+
+                const guestsByTable = guests.reduce((acc, guest) => {
+                    const tableNum = guest.tableNumber || 'N/A';
+                    if (!acc[tableNum]) acc[tableNum] = [];
+                    acc[tableNum].push(guest);
+                    return acc;
+                }, {});
+
+                const sortedTables = Object.keys(guestsByTable).sort((a, b) => {
+                    if (a === 'N/A') return 1; if (b === 'N/A') return -1;
+                    return parseInt(a) - parseInt(b)
+                });
+                
+                const tableBody = [
+                    [
+                        { text: 'P/G', style: 'tableHeader' }, 
+                        { text: 'Nome Completo', style: 'tableHeader' }, 
+                        { text: 'Nome de Guerra', style: 'tableHeader' },
+                        { text: 'Telefone', style: 'tableHeader' },
+                        { text: 'E-mail', style: 'tableHeader' },
+                        { text: 'Nº SARAM', style: 'tableHeader' },
+                        { text: 'Tipo', style: 'tableHeader' }, 
+                        { text: 'Valor Pago', style: 'tableHeader' }
+                    ]
+                ];
+
+                sortedTables.forEach(tableNumber => {
+                    tableBody.push([{ text: `Mesa ${tableNumber}`, colSpan: 8, style: 'tableSubHeader', fillColor: '#E5E7EB' }, {}, {}, {}, {}, {}, {}, {}]);
+                    guestsByTable[tableNumber].forEach(guest => {
+                        tableBody.push([
+                            guest.postoGrad || '',
+                            guest.fullName,
+                            guest.callSign || '',
+                            guest.phone || '',
+                            guest.email || '',
+                            guest.saram || '',
+                            getGuestTypeDisplay(guest),
+                            { text: `R$ ${getGuestPrice(guest).toFixed(2)}`, alignment: 'right' }
+                        ]);
+                    });
+                });
+                
+                const docDefinition = {
+                    pageOrientation: 'landscape',
+                    pageSize: 'A4',
+                    content: [
+                        {
+                            columns: [
+                                { image: logoDataUrl, width: 60, alignment: 'left' },
+                                {
+                                    stack: [
+                                        { text: event.name, style: 'header' },
+                                        { text: `${new Date(event.date.seconds * 1000).toLocaleDateString('pt-BR')} às ${event.time} - ${event.location}`, style: 'eventDetails' }
+                                    ],
+                                    width: '*',
+                                    alignment: 'center'
+                                },
+                                { text: '', width: 60 } // Spacer
+                            ],
+                            columnGap: 10
+                        },
+                        {
+                            layout: 'lightHorizontalLines',
+                            table: {
+                                headerRows: 1,
+                                widths: ['auto', '*', 'auto', 'auto', '*', 'auto', 'auto', 'auto'],
+                                body: tableBody
+                            },
+                            margin: [0, 15, 0, 0]
+                        },
+                        {
+                            text: `Total Arrecadado: R$ ${reportData.totalRevenue.toFixed(2)}`,
+                            style: 'total'
+                        }
+                    ],
+                    styles: {
+                        header: { fontSize: 24, bold: true, color: '#0284c7', margin: [0, 10, 0, 0] },
+                        eventDetails: { fontSize: 11, color: '#374151', margin: [0, 4, 0, 0] },
+                        tableHeader: { bold: true, fontSize: 9, color: 'white', fillColor: '#0369a1', alignment: 'center' },
+                        tableSubHeader: { bold: true, fontSize: 11, color: '#0369a1', margin: [0, 6, 0, 2], alignment: 'left' },
+                        total: { fontSize: 14, bold: true, alignment: 'right', margin: [0, 20, 0, 0] },
+                    },
+                    defaultStyle: {
+                        fontSize: 8
+                    }
+                };
+
+                pdfMake.createPdf(docDefinition).download(`Relatorio_${event.name.replace(/\s/g, '_')}.pdf`);
+            };
+
+            return (
+                <div className="p-4 sm:p-6 md:p-8 animate-fade-in">
+                    {showGuestForm && <Modal onClose={() => { setShowGuestForm(false); setGuestToEdit(null); }}><GuestForm event={event} guests={guests} onSave={handleSaveGuest} onClose={() => { setShowGuestForm(false); setGuestToEdit(null); }} guestToEdit={guestToEdit}/></Modal>}
+                    {showDeleteConfirm && <ConfirmationModal title={showDeleteConfirm === 'event' ? 'Excluir Evento?' : 'Excluir Convidado?'} message={showDeleteConfirm === 'event' ? 'Esta ação é irreversível.' : 'Tem certeza que deseja remover este convidado?'} onConfirm={() => showDeleteConfirm === 'event' ? onDeleteEvent(event.id) : handleDeleteGuest(showDeleteConfirm)} onCancel={() => setShowDeleteConfirm(null)}/>}
+                    {showQRCode && <QRCodeModal guest={showQRCode} event={event} onClose={() => setShowQRCode(null)} />}
+
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <div>
+                            <button onClick={onBack} className="flex items-center gap-2 text-yellow-400 hover:text-yellow-300 mb-2 transition-colors"><ArrowLeft size={20} /> Voltar para Eventos</button>
+                            <h1 className="text-3xl sm:text-4xl font-bold text-white">{event.name}</h1>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => onStartCheckIn(event)} className="flex items-center gap-2 bg-blue-600 text-white font-bold px-4 py-2 rounded-lg hover:bg-blue-500 transition-colors">
+                                <QrCode size={18} /> Fazer Check-in
+                            </button>
+                            <button onClick={() => onEditEvent(event)} className="p-2 bg-slate-600 rounded-lg hover:bg-slate-500 transition-colors text-white"><Edit size={20}/></button>
+                            <button onClick={() => setShowDeleteConfirm('event')} className="p-2 bg-red-600 rounded-lg hover:bg-red-500 transition-colors text-white"><Trash2 size={20}/></button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 text-white">
+                        <div className="bg-slate-800 p-4 rounded-lg flex items-center gap-4"><Calendar className="text-yellow-400" size={28}/><div className="text-sm"><strong>Data:</strong><br/>{new Date(event.date.seconds * 1000).toLocaleDateString('pt-BR')} às {event.time}</div></div>
+                        <div className="bg-slate-800 p-4 rounded-lg flex items-center gap-4"><MapPin className="text-yellow-400" size={28}/><div className="text-sm"><strong>Local:</strong><br/>{event.location}</div></div>
+                        <div className="bg-slate-800 p-4 rounded-lg flex items-center gap-4"><Users className="text-yellow-400" size={28}/><div className="text-sm"><strong>Convidados:</strong><br/>{guests.length} / {event.maxParticipants}</div></div>
+                        <div className="bg-slate-800 p-4 rounded-lg flex items-center gap-4"><Users className="text-yellow-400" size={28}/><div className="text-sm"><strong>Mesas:</strong><br/>{event.tableCount}</div></div>
+                    </div>
+
+                    <div className="flex justify-between items-center border-b border-slate-700 mb-6">
+                        <div className="flex">
+                            <button onClick={() => setActiveTab('guests')} className={`px-4 py-3 font-semibold transition-colors ${activeTab === 'guests' ? 'text-yellow-400 border-b-2 border-yellow-400' : 'text-gray-400 hover:text-white'}`}>Lista de Convidados</button>
+                            <button onClick={() => setActiveTab('report')} className={`px-4 py-3 font-semibold transition-colors ${activeTab === 'report' ? 'text-yellow-400 border-b-2 border-yellow-400' : 'text-gray-400 hover:text-white'}`}>Relatório do Evento</button>
+                        </div>
+                        {activeTab === 'report' && (
+                            <button onClick={generatePDF} className="flex items-center gap-2 bg-green-600 text-white font-bold px-4 py-2 rounded-lg hover:bg-green-500 transition-colors">
+                                <FileText size={18} /> Gerar Relatório PDF
+                            </button>
+                        )}
+                    </div>
+                    
+                    {loadingGuests ? <Spinner /> : (
+                        <>
+                            {activeTab === 'guests' && (
+                                <div>
+                                    <div className="flex justify-end mb-4"><button onClick={() => { setGuestToEdit(null); setShowGuestForm(true); }} className="flex items-center gap-2 bg-yellow-400 text-black font-bold px-4 py-2 rounded-lg hover:bg-yellow-300 transition-all transform hover:scale-105"><Plus size={20}/> Cadastrar Convidado</button></div>
+                                    <div className="bg-slate-800 rounded-lg overflow-x-auto">
+                                        <table className="w-full text-left text-sm text-gray-300">
+                                            <thead className="bg-slate-700/50 text-xs text-gray-400 uppercase"><tr><th className="p-4">Check-in</th><th className="p-4">P/G</th><th className="p-4">Nome</th><th className="p-4">Tipo</th><th className="p-4">Mesa</th><th className="p-4">Ações</th></tr></thead>
+                                            <tbody>
+                                                {guests.length > 0 ? guests.map(guest => (
+                                                    <tr key={guest.id} className="border-b border-slate-700 hover:bg-slate-700/50">
+                                                        <td className="p-4 text-center">{guest.checkedIn ? <CheckCircle2 className="text-green-400 mx-auto" /> : <XCircle className="text-gray-500 mx-auto" />}</td>
+                                                        <td className="p-4 font-medium text-white">{guest.postoGrad}</td>
+                                                        <td className="p-4 font-medium text-white">{guest.fullName}</td>
+                                                        <td className="p-4 capitalize">{getGuestTypeDisplay(guest)}</td>
+                                                        <td className="p-4">{guest.tableNumber}</td>
+                                                        <td className="p-4 flex gap-2">
+                                                            <button onClick={() => setShowQRCode(guest)} className="p-2 text-gray-400 hover:text-white"><QrCode size={18}/></button>
+                                                            <button onClick={() => openEditGuestForm(guest)} className="p-2 text-blue-400 hover:text-blue-300"><Edit size={18}/></button>
+                                                            <button onClick={() => setShowDeleteConfirm(guest.id)} className="p-2 text-red-500 hover:text-red-400"><Trash2 size={18}/></button>
+                                                        </td>
+                                                    </tr>
+                                                )) : (<tr><td colSpan="6" className="text-center p-8 text-gray-400">Nenhum convidado cadastrado.</td></tr>)}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+                            {activeTab === 'report' && (
+                                <div className="space-y-8">
+                                    <div className="bg-slate-800 p-6 rounded-lg"><h3 className="text-2xl font-bold text-yellow-400 mb-4">Resumo Financeiro</h3><p className="text-4xl font-light text-white">Total Arrecadado: <span className="font-bold">R$ {reportData.totalRevenue.toFixed(2)}</span></p></div>
+                                    <div className="bg-slate-800 p-6 rounded-lg">
+                                      <h3 className="text-2xl font-bold text-yellow-400 mb-4">Disposição das Mesas</h3>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        {/* *** BUG FIX APPLIED HERE *** */}
+                                        {Object.keys(reportData.guestsByTable).sort((a,b) => parseInt(a) - parseInt(b)).map(tableNumber => (
+                                          <div key={tableNumber} className="bg-slate-700 p-4 rounded-lg">
+                                            <h4 className="font-bold text-lg text-white mb-3">Mesa {tableNumber} ({reportData.guestsByTable[tableNumber].length}/8)</h4>
+                                            <ul className="space-y-2 text-sm">{reportData.guestsByTable[tableNumber].map(guest => (<li key={guest.id} className="text-gray-300">{guest.fullName}</li>))}</ul>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            );
+        };
+
+        const EventList = ({ events, onSelectEvent, onCreateEvent, onDeleteEvent, onEditEvent }) => {
+            const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
+            const handleDeleteClick = (e, eventId) => { e.stopPropagation(); setShowDeleteConfirm(eventId); };
+            const handleEditClick = (e, event) => { e.stopPropagation(); onEditEvent(event); };
+            const confirmDelete = () => { if (showDeleteConfirm) { onDeleteEvent(showDeleteConfirm); setShowDeleteConfirm(null); } };
+
+            return (
+                <div className="p-4 sm:p-6 md:p-8 animate-fade-in">
+                    {showDeleteConfirm && <ConfirmationModal title="Excluir Evento?" message="Esta ação é irreversível." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(null)}/>}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+                        <div>
+                            <h1 className="text-3xl sm:text-4xl font-bold text-white">Eventos CASUSA</h1>
+                            <p className="text-gray-400 mt-1">Gerencie seus eventos e convidados.</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={onCreateEvent} className="flex items-center gap-2 bg-yellow-400 text-black font-bold px-6 py-3 rounded-lg hover:bg-yellow-300 transition-all transform hover:scale-105 shadow-lg shadow-yellow-500/20"><Plus size={22}/> Criar Evento</button>
+                        </div>
+                    </div>
+
+                    {events.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {events.map(event => (
+                                <div key={event.id} onClick={() => onSelectEvent(event)} className="bg-slate-800 rounded-xl shadow-lg hover:shadow-yellow-400/20 hover:ring-2 hover:ring-yellow-400/50 transition-all cursor-pointer transform hover:-translate-y-1">
+                                    <div className="p-6">
+                                        <h2 className="text-xl font-bold text-white mb-2">{event.name}</h2>
+                                        <div className="flex items-center gap-2 text-sm text-gray-400 mb-4"><Calendar size={16} /><span>{new Date(event.date.seconds * 1000).toLocaleDateString('pt-BR')}</span></div>
+                                        <div className="flex items-center justify-between text-sm text-gray-300"><div className="flex items-center gap-2"><Users size={16} /> {event.maxParticipants} Pessoas</div><div className="flex items-center gap-2"><MapPin size={16} /> {event.location}</div></div>
+                                    </div>
+                                    <div className="bg-slate-700/50 px-6 py-3 flex justify-end gap-2 rounded-b-xl">
+                                        <button onClick={(e) => handleEditClick(e, event)} className="p-2 text-blue-400 hover:text-blue-300 rounded-full hover:bg-slate-600 transition-colors"><Edit size={18}/></button>
+                                        <button onClick={(e) => handleDeleteClick(e, event.id)} className="p-2 text-red-500 hover:text-red-400 rounded-full hover:bg-slate-600 transition-colors"><Trash2 size={18}/></button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (<div className="text-center py-20 px-6 bg-slate-800 rounded-xl"><h2 className="text-2xl font-semibold text-white mb-2">Nenhum evento encontrado.</h2><p className="text-gray-400">Comece criando um novo evento.</p></div>)}
+                </div>
+            );
+        };
+
+        const CheckInScanner = ({ event, onBack }) => {
+            const qrScannerStatus = useScript("https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js");
+            const [message, setMessage] = useState({ type: '', text: '' });
+            const scannerRef = useRef(null);
+            const scannerInstance = useRef(null);
+
+            useEffect(() => {
+                if (qrScannerStatus !== 'ready' || !scannerRef.current || scannerInstance.current) return;
+
+                const html5QrCode = new window.Html5Qrcode(scannerRef.current.id);
+                scannerInstance.current = html5QrCode;
+
+                const qrCodeSuccessCallback = async (decodedText, decodedResult) => {
+                    html5QrCode.pause();
+                    try {
+                        const { eventId, guestId } = JSON.parse(decodedText);
+                        if (!eventId || !guestId) throw new Error("QR Code inválido.");
+                        
+                        if (eventId !== event.id) {
+                            setMessage({ type: 'error', text: 'QR Code inválido para este evento.' });
+                            return;
+                        }
+
+                        const guestDocRef = doc(db, `artifacts/${appId}/public/data/guests`, guestId);
+                        const guestSnap = await getDoc(guestDocRef);
+
+                        if (!guestSnap.exists()) {
+                            setMessage({ type: 'error', text: 'Convidado não encontrado.' });
+                            return;
+                        }
+
+                        const guest = guestSnap.data();
+                        if (guest.checkedIn) {
+                            setMessage({ type: 'warning', text: `${guest.fullName} já realizou o check-in.` });
+                        } else {
+                            await updateDoc(guestDocRef, { checkedIn: true });
+                            setMessage({ type: 'success', text: `Check-in de ${guest.fullName} confirmado!` });
+                        }
+                    } catch (e) {
+                        setMessage({ type: 'error', text: 'QR Code inválido ou erro ao processar.' });
+                        console.error(e);
+                    } finally {
+                        setTimeout(() => {
+                            setMessage({ type: '', text: '' });
+                            if (html5QrCode.getState() === 2) { // 2 is PAUSED state
+                                html5QrCode.resume();
+                            }
+                        }, 3000);
+                    }
+                };
+
+                const config = { fps: 10, qrbox: { width: 250, height: 250 }, supportedScanTypes: [0] }; // 0 for camera
+                html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback)
+                    .catch(err => console.log("Erro ao iniciar scanner:", err));
+
+                return () => {
+                    if (scannerInstance.current && scannerInstance.current.isScanning) {
+                        scannerInstance.current.stop().catch(err => console.error("Erro ao parar scanner:", err));
+                    }
+                };
+            }, [qrScannerStatus, event.id]);
+
+            return (
+                <div className="p-4 sm:p-6 md:p-8 animate-fade-in">
+                    <button onClick={onBack} className="flex items-center gap-2 text-yellow-400 hover:text-yellow-300 mb-4 transition-colors"><ArrowLeft size={20} /> Voltar</button>
+                    <div className="max-w-xl mx-auto bg-slate-800 rounded-xl p-6 shadow-lg">
+                        <h2 className="text-2xl font-bold text-white mb-4 text-center">Check-in para: {event.name}</h2>
+                        <div id="qr-reader" ref={scannerRef} className="w-full"></div>
+                        {message.text && (
+                            <div className={`mt-4 p-4 rounded-lg text-center font-bold text-white ${message.type === 'success' ? 'bg-green-500/80' : message.type === 'warning' ? 'bg-yellow-500/80' : 'bg-red-500/80'}`}>
+                                {message.text}
+                            </div>
+                        )}
+                         {qrScannerStatus === 'loading' && <p className="text-center text-gray-400 mt-4">Carregando scanner...</p>}
+                    </div>
+                </div>
+            );
+        };
+
+
+        // --- COMPONENTE PRINCIPAL ---
+
+        function App() {
+            const [view, setView] = useState('list');
+            const [events, setEvents] = useState([]);
+            const [selectedEvent, setSelectedEvent] = useState(null);
+            const [eventToEdit, setEventToEdit] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [showEventFormModal, setShowEventFormModal] = useState(false);
+
+            useEffect(() => {
+                const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                    } else {
+                        try {
+                            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                            if (token) {
+                                await signInWithCustomToken(auth, token);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (authError) { 
+                            console.error("Erro na autenticação:", authError); 
+                            setError("Falha na autenticação. Verifique as configurações do Firebase."); 
+                        }
+                    }
+                    setIsAuthReady(true);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!isAuthReady || !userId) { 
+                    setLoading(isAuthReady ? false : true); 
+                    if (isAuthReady && !userId && !error) {
+                        setError("Autenticando...");
+                    }
+                    return; 
+                };
+                
+                setError(null);
+                setLoading(true);
+                const eventsCollection = collection(db, `artifacts/${appId}/public/data/events`);
+                const q = query(eventsCollection, where("userId", "==", userId));
+                
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.date.seconds - a.date.seconds));
+                    setLoading(false);
+                }, (err) => { 
+                    console.error("Erro ao buscar eventos: ", err); 
+                    setError("Não foi possível carregar os eventos. Verifique as regras de segurança do Firestore."); 
+                    setLoading(false); 
+                });
+                
+                return () => unsubscribe();
+            }, [isAuthReady, userId]);
+
+            const handleSaveEvent = async (eventData) => {
+                try {
+                    const payload = { ...eventData, userId };
+                    if (eventToEdit) {
+                        await setDoc(doc(db, `artifacts/${appId}/public/data/events`, eventToEdit.id), payload);
+                    } else {
+                        await addDoc(collection(db, `artifacts/${appId}/public/data/events`), payload);
+                    }
+                    setShowEventFormModal(false); setEventToEdit(null);
+                } catch (e) { console.error("Erro ao salvar evento: ", e); setError("Ocorreu um erro ao salvar o evento."); }
+            };
+
+            const handleDeleteEvent = async (eventId) => {
+                try {
+                    // Adicionar lógica para deletar convidados do evento, se necessário
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/events`, eventId));
+                    setView('list'); // Retorna para a lista após deletar
+                } catch (e) { console.error("Erro ao deletar evento: ", e); setError("Ocorreu um erro ao deletar o evento."); }
+            };
+            
+            const handleSelectEvent = (event) => { setSelectedEvent(event); setView('detail'); };
+            const handleCreateEvent = () => { setEventToEdit(null); setShowEventFormModal(true); };
+            const handleEditEvent = (event) => { setEventToEdit(event); setShowEventFormModal(true); };
+            const handleStartCheckIn = (event) => { setSelectedEvent(event); setView('scanner'); };
+            const handleCloseForm = () => { setShowEventFormModal(false); setEventToEdit(null); };
+
+            const renderContent = () => {
+                if (loading) return <Spinner />;
+                if (error) return <div className="text-center text-red-400 p-8 bg-slate-800 rounded-lg m-8">{error}</div>;
+
+                switch(view) {
+                    case 'detail':
+                        return <EventDetailView event={selectedEvent} onBack={() => setView('list')} onEditEvent={handleEditEvent} onDeleteEvent={handleDeleteEvent} userId={userId} onStartCheckIn={handleStartCheckIn} />;
+                    case 'scanner':
+                        return <CheckInScanner event={selectedEvent} onBack={() => setView('detail')} />;
+                    case 'list':
+                    default:
+                        return <EventList events={events} onSelectEvent={handleSelectEvent} onCreateEvent={handleCreateEvent} onDeleteEvent={handleDeleteEvent} onEditEvent={handleEditEvent} />;
+                }
+            };
+
+            return (
+                <div className="bg-slate-900 min-h-screen font-sans text-white">
+                    {showEventFormModal && (
+                        <Modal onClose={handleCloseForm}>
+                            <EventForm onSave={handleSaveEvent} onClose={handleCloseForm} eventToEdit={eventToEdit} />
+                        </Modal>
+                    )}
+                    <header className="bg-slate-900/80 backdrop-blur-lg border-b border-slate-700 p-4 flex justify-between items-center sticky top-0 z-40">
+                        <div className="flex items-center gap-3">
+                            <img src="https://i.imgur.com/gS26UaH.png" alt="Logo CASUSA" className="h-10 w-10"/>
+                            <span className="font-bold text-xl hidden sm:inline">Eventos CASUSA</span>
+                        </div>
+                    </header>
+                    <main>
+                        {renderContent()}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- RENDERIZAÇÃO DO APP ---
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
